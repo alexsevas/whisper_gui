@@ -9,16 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from threading import Thread
 import time
 from datetime import datetime
-
-# class ProgressHandler:
-#     def __init__(self, progress_bar, root):
-#         self.progress_bar = progress_bar
-#         self.root = root
-
-#     def __call__(self, progress):
-#         # Прогресс от whisper обычно от 0 до 1, преобразуем в 0-100
-#         # self.progress_bar['value'] = progress * 100 # Этот параметр не используется в indeterminate режиме
-#         self.root.update_idletasks() # Обновляем GUI
+from typing import Dict, Any
 
 WHISPER_MODELS = [
     'tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3', 'turbo'
@@ -31,6 +22,106 @@ OUTPUT_FORMATS = [
     ('TXT файл', 'txt'),
     ('SRT файл (субтитры)', 'srt')
 ]
+
+# --- Темы оформления (принудительно темная) ---
+THEME_DARK = {
+    'bg': '#23272e', 'fg': '#e0e0e0', 'entry_bg': '#2d323b', 'entry_fg': '#e0e0e0', 'button_bg': '#444b57',
+    'button_fg': '#e0e0e0', 'text_bg': '#23272e', 'text_fg': '#e0e0e0', 'select_bg': '#3a4a5a', 'select_fg': '#fff',
+    'status_fg': '#b0b0b0',
+    'console_bg': '#101010', 'console_fg': '#00ff00',
+    'scrollbar_bg': '#444b57', 'scrollbar_trough': '#2d323b', 'scrollbar_active': '#3a4a5a',
+    'combobox_arrow': '#e0e0e0'  # Цвет стрелки комбобокса
+}
+
+
+def apply_dark_theme(root_widget, control_widgets, result_widgets, console_widgets):
+    theme = THEME_DARK
+    root_widget.configure(bg=theme['bg'])
+
+    style = ttk.Style()
+    style.theme_use('clam')
+
+    # TCombobox
+    style.configure('TCombobox',
+                    fieldbackground=theme['entry_bg'],
+                    background=theme['entry_bg'],
+                    foreground=theme['entry_fg'],
+                    arrowcolor=theme['combobox_arrow'],
+                    bordercolor=theme['entry_bg']
+                    )
+    style.map('TCombobox',
+              fieldbackground=[('readonly', theme['entry_bg'])],
+              background=[('readonly', theme['entry_bg'])],
+              foreground=[('readonly', theme['entry_fg'])],
+              selectbackground=[('readonly', theme['select_bg'])],
+              selectforeground=[('readonly', theme['select_fg'])]
+              )
+
+    # Vertical.TScrollbar
+    style.configure('Vertical.TScrollbar',
+                    background=theme['scrollbar_bg'],
+                    troughcolor=theme['scrollbar_trough'],
+                    gripcolor=theme['select_bg'],
+                    bordercolor=theme['scrollbar_bg']
+                    )
+    style.map('Vertical.TScrollbar',
+              background=[('active', theme['scrollbar_active'])]
+              )
+
+    # TButton
+    style.configure('TButton',
+                    background=theme['button_bg'],
+                    foreground=theme['button_fg'],
+                    bordercolor=theme['button_bg']
+                    )
+    style.map('TButton',
+              background=[('active', theme['select_bg'])],
+              foreground=[('active', theme['select_fg'])])
+
+    # TCheckbutton
+    style.configure('TCheckbutton',
+                    background=theme['bg'],
+                    foreground=theme['fg'],
+                    indicatorcolor=theme['entry_bg'],
+                    selectcolor=theme['select_bg']
+                    )
+    style.map('TCheckbutton',
+              background=[('active', theme['bg'])],
+              foreground=[('active', theme['fg'])])
+
+    # TProgressbar
+    style.configure('TProgressbar',
+                    background=theme['select_bg'],
+                    troughcolor=theme['entry_bg'],
+                    bordercolor=theme['entry_bg']
+                    )
+
+    # Применение цветов к стандартным Tk виджетам (передаем словари виджетов)
+    for widget in control_widgets.values():
+        if isinstance(widget, tk.Label):
+            widget.configure(bg=theme['bg'], fg=theme['fg'])
+        elif isinstance(widget, tk.Button):
+            widget.configure(bg=theme['button_bg'], fg=theme['button_fg'], activebackground=theme['select_bg'],
+                             activeforeground=theme['select_fg'])
+
+    for widget in result_widgets.values():
+        if isinstance(widget, tk.Label):
+            widget.configure(bg=theme['bg'], fg=theme['fg'])
+        elif isinstance(widget, tk.Text):
+            widget.configure(bg=theme['text_bg'], fg=theme['text_fg'], insertbackground=theme['fg'])
+
+    for widget in console_widgets.values():
+        if isinstance(widget, tk.Text):
+            widget.configure(bg=theme['console_bg'], fg=theme['console_fg'])
+
+    # Apply colors to Tk Frames
+    left_column_frame.configure(bg=theme['bg'])
+    control_frame.configure(bg=theme['bg'])
+    console_frame.configure(bg=theme['bg'])
+    result_container_frame.configure(bg=theme['bg'])
+    result_frame.configure(bg=theme['bg'])
+
+    # Проверка наличия моделей при запуске (теперь вызывается после создания info_console)
 
 
 # --- Функция для добавления сообщения в консоль ---
@@ -48,8 +139,7 @@ def get_window_size():
     root.withdraw()
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
-    min_side = min(screen_width, screen_height)
-    win_width = int(min_side * 0.5)
+    win_width = int(screen_width * 0.8)
     win_height = int(screen_height * 0.8)
     root.destroy()
     return win_width, win_height, screen_width, screen_height
@@ -59,6 +149,34 @@ win_width, win_height, screen_width, screen_height = get_window_size()
 
 
 # --- Основные функции ---
+def get_media_duration(file_path):
+    try:
+        command = [
+            'ffmpeg', '-i', file_path, '-hide_banner'
+        ]
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        duration_line = ""
+        for line in result.stderr.splitlines():
+            if "Duration:" in line:
+                duration_line = line
+                break
+
+        if duration_line:
+            # Example: Duration: 00:00:04.60, start: 0.000000, bitrate: 72 kb/s
+            parts = duration_line.split('Duration: ')[1].split(',')[0].strip().split(':')
+            if len(parts) == 3:
+                hours = int(parts[0])
+                minutes = int(parts[1])
+                seconds_and_ms = float(parts[2])
+                seconds = int(seconds_and_ms)
+
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return "N/A"
+    except Exception as e:
+        return f"Ошибка при получении длительности: {e}"
+
+
 def extract_audio(video_path, audio_path):
     command = [
         'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path
@@ -105,11 +223,11 @@ def to_srt_time(seconds):
 
 
 def process_video_or_audio(file_path, model_name, device, language_code, output_format_ext, status_label, result_text,
-                           root, select_button, info_console, progress_bar):
+                           root, select_button, info_console, progress_bar, show_result_var):
     try:
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         dir_name = os.path.dirname(file_path)
-        output_filename = f"{base_name}_transcript.{output_format_ext}"
+        output_filename = f"{base_name}.{output_format_ext}"
         output_path = os.path.join(dir_name, output_filename)
 
         root.title(f"Распознаем: {os.path.basename(file_path)}")
@@ -127,20 +245,24 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
             extract_audio(file_path, audio_path)
 
         status_label.config(text="Расшифровка аудио...")
-        log_console(info_console, "Распознавание речи...")
+        log_console(info_console, f"Распознавание речи с использованием модели '{model_name}'...")
 
-        progress_bar.pack(fill=tk.X, padx=2, pady=2)  # Делаем прогресс-бар видимым
+        # progress_bar.pack(fill=tk.X, padx=2, pady=2) # Делаем прогресс-бар видимым
+        progress_bar.grid()  # Размещаем в сетке консольного фрейма
         progress_bar.start()  # Запускаем неопределенный прогресс-бар
 
-        # progress_handler = ProgressHandler(progress_bar, root)
-        transcribe_result = transcribe_audio(audio_path, model_name, device, language_code)
+        transcribe_result: Dict[str, Any] = transcribe_audio(audio_path, model_name, device, language_code)
 
         # Output to GUI Text field
         text_to_display = transcribe_result["text"]
         if not isinstance(text_to_display, str):
             text_to_display = str(text_to_display)
-        result_text.delete(1.0, tk.END)
-        result_text.insert(tk.END, text_to_display)
+
+        # Обновляем поле результата только если чекбокс активен
+        if show_result_var.get():
+            result_text.config(state=tk.NORMAL)  # Временно активируем для записи
+            result_text.delete(1.0, tk.END)
+            result_text.insert(tk.END, text_to_display)
 
         # Save to file
         if output_format_ext == 'txt':
@@ -148,7 +270,7 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
                 f.write(text_to_display)
         elif output_format_ext == 'srt':
             srt_content = []
-            for i, segment in enumerate(transcribe_result["segments"], start=1):
+            for i, segment in enumerate(transcribe_result["segments"]):
                 start_srt = to_srt_time(segment['start'])
                 end_srt = to_srt_time(segment['end'])
                 srt_content.append(f"{i}\n{start_srt} --> {end_srt}\n{segment['text'].strip()}\n\n")
@@ -168,13 +290,16 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         if audio_path_to_delete and os.path.exists(audio_path_to_delete):
             os.remove(audio_path_to_delete)
         root.title("Преобразовать видео/аудио --> текст")
-        progress_bar.pack_forget()  # Скрываем прогресс-бар
+        progress_bar.grid_remove()  # Скрываем прогресс-бар
         progress_bar.stop()  # Останавливаем прогресс-бар
+
+        # Устанавливаем конечное состояние result_text на основе чекбокса
+        result_text.config(state=tk.DISABLED if not show_result_var.get() else tk.NORMAL)
         root.after(100, lambda: select_button.config(state=tk.NORMAL))
 
 
 def select_file(model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
-                info_console, progress_bar):
+                info_console, progress_bar, show_result_var):
     filetypes = [
         (
         "Видео/Аудио файлы", "*.mp4;*.avi;*.mov;*.mkv;*.webm;*.mp3;*.wav;*.m4a;*.flac;*.ogg;*.opus;*.mpga;*.aac;*.wma"),
@@ -190,19 +315,19 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
         select_button.config(state=tk.DISABLED)
         status_label.config(text="Обработка...")
         log_console(info_console, "Файл выбран: " + os.path.basename(file_path))
+        duration = get_media_duration(file_path)
+        log_console(info_console, f"Продолжительность файла: {duration}")
         model_name = model_var.get()
         device = 'cuda' if device_var.get() == 'CUDA' else 'cpu'
-        # Получаем выбранный язык из StringVar и ищем соответствующий код
         selected_lang_name = lang_var.get()
         language_code = next((code for name, code in LANGUAGES if name == selected_lang_name), None)
 
-        # Получаем выбранный формат из StringVar и ищем соответствующее расширение
         selected_output_format_name = output_format_var.get()
         output_format_ext = next((ext for name, ext in OUTPUT_FORMATS if name == selected_output_format_name), None)
 
         Thread(target=process_video_or_audio, args=(
         file_path, model_name, device, language_code, output_format_ext, status_label, result_text, root, select_button,
-        info_console, progress_bar), daemon=True).start()
+        info_console, progress_bar, show_result_var), daemon=True).start()
 
 
 # --- Интерфейс ---
@@ -210,174 +335,155 @@ root = tk.Tk()
 root.title("Преобразовать видео/аудио --> текст")
 root.geometry(f"{win_width}x{win_height}+{(screen_width - win_width) // 2}+{(screen_height - win_height) // 2}")
 
-# --- Темы оформления (принудительно темная) ---
-THEME_DARK = {
-    'bg': '#23272e', 'fg': '#e0e0e0', 'entry_bg': '#2d323b', 'entry_fg': '#e0e0e0', 'button_bg': '#444b57',
-    'button_fg': '#e0e0e0', 'text_bg': '#23272e', 'text_fg': '#e0e0e0', 'select_bg': '#3a4a5a', 'select_fg': '#fff',
-    'status_fg': '#b0b0b0',
-    'console_bg': '#101010', 'console_fg': '#00ff00',
-    'scrollbar_bg': '#444b57', 'scrollbar_trough': '#2d323b', 'scrollbar_active': '#3a4a5a',
-    'combobox_arrow': '#e0e0e0'  # Цвет стрелки комбобокса
-}
+# Настройка колонок и строк корневого окна
+root.grid_columnconfigure(0, weight=0)  # Левая колонка (элементы управления + консоль) - не расширяется сильно
+root.grid_columnconfigure(1, weight=1)  # Правая колонка (результат) - расширяется
+root.grid_rowconfigure(0,
+                       weight=0)  # Верхняя строка (элементы управления в левой, чекбокс/лейбл в правой) - не расширяется сильно
+root.grid_rowconfigure(1, weight=1)  # Нижняя строка (консоль в левой, текстовое поле в правой) - расширяется
 
+# --- Левая колонка: Элементы управления и Информационная консоль ---
+left_column_frame = tk.Frame(root)  # Создаем фрейм для левой колонки
+left_column_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(5, 3),
+                       pady=8)  # Занимает 2 строки, левую колонку
+left_column_frame.grid_rowconfigure(0, weight=0)  # Верхняя часть (control_frame) - не расширяется
+left_column_frame.grid_rowconfigure(1, weight=1)  # Нижняя часть (console_frame) - расширяется
+left_column_frame.grid_columnconfigure(0, weight=1)  # Единственная колонка в left_column_frame расширяется
 
-def apply_dark_theme():
-    theme = THEME_DARK
-    root.configure(bg=theme['bg'])
-    control_frame.configure(bg=theme['bg'])
-
-    # Настройка стилей ttk виджетов
-    style = ttk.Style()
-    style.theme_use('clam')  # Выбираем тему, которую можно настроить
-
-    style.configure('TCombobox',
-                    fieldbackground=theme['entry_bg'],
-                    background=theme['entry_bg'],
-                    foreground=theme['entry_fg'],
-                    arrowcolor=theme['combobox_arrow'],
-                    bordercolor=theme['entry_bg']
-                    )
-    style.map('TCombobox',
-              fieldbackground=[('readonly', theme['entry_bg'])],
-              background=[('readonly', theme['entry_bg'])],
-              foreground=[('readonly', theme['entry_fg'])],
-              selectbackground=[('readonly', theme['select_bg'])],
-              selectforeground=[('readonly', theme['select_fg'])]
-              )
-
-    style.configure('Vertical.TScrollbar',
-                    background=theme['scrollbar_bg'],
-                    troughcolor=theme['scrollbar_trough'],
-                    gripcolor=theme['select_bg'],
-                    bordercolor=theme['scrollbar_bg']
-                    )
-    style.map('Vertical.TScrollbar',
-              background=[('active', theme['scrollbar_active'])]
-              )
-
-    # Применение цветов к стандартным Tk виджетам
-    model_label.configure(bg=theme['bg'], fg=theme['fg'])
-    device_label.configure(bg=theme['bg'], fg=theme['fg'])
-    lang_label.configure(bg=theme['bg'], fg=theme['fg'])
-    output_format_label.configure(bg=theme['bg'], fg=theme['fg'])
-    select_button.configure(bg=theme['button_bg'], fg=theme['button_fg'], activebackground=theme['select_bg'],
-                            activeforeground=theme['select_fg'])
-    status_label.configure(bg=theme['bg'], fg=theme['status_fg'])
-    result_label.configure(bg=theme['bg'], fg=theme['fg'])
-    result_text.configure(bg=theme['text_bg'], fg=theme['text_fg'], insertbackground=theme['fg'])
-    info_console.configure(bg=theme['console_bg'], fg=theme['console_fg'])
-    style.configure('TProgressbar',
-                    background=theme['select_bg'],  # Цвет заполнения прогресс-бара
-                    troughcolor=theme['entry_bg'],  # Цвет фона прогресс-бара
-                    bordercolor=theme['entry_bg']
-                    )
-
-    # Проверка наличия моделей при запуске
-    for model_name in WHISPER_MODELS:
-        if not check_model_in_cache(model_name):
-            log_console(info_console,
-                        f"Модель Whisper '{model_name}' не найдена в кэше. Она будет загружена автоматически при первом использовании (требуется интернет-соединение).")
-    if not torch.cuda.is_available():
-        log_console(info_console,
-                    "CUDA-совместимое устройство не обнаружено. Будет использоваться CPU (может быть медленнее).")
-
-
-# Компактный блок управления (до 40% высоты окна)
-max_control_height = int(win_height * 0.4)
-control_frame = tk.Frame(root)
-control_frame.pack(side=tk.TOP, fill=tk.X, pady=int(win_width * 0.01))
-
-# Плотная вертикальная группировка
-# for widget in control_frame.winfo_children(): # Удалено: pack_forget() не нужен при первом pack
-#     widget.pack_forget()
+# --- Компактный блок управления (в левой колонке) ---
+control_frame = tk.Frame(left_column_frame)  # Родитель - left_column_frame
+control_frame.grid(row=0, column=0, sticky="nsew")
+control_frame.grid_columnconfigure(0, weight=0)  # Метки не расширяются
+control_frame.grid_columnconfigure(1, weight=1)  # Комбобоксы и кнопка расширяются
 
 row_pad = 2
+
 # Модель Whisper
 model_label = tk.Label(control_frame, text="Модель Whisper:")
-model_label.pack(anchor='w', padx=8, pady=(row_pad, 0))
-model_var = tk.StringVar(value='large-v3')
-model_combo = ttk.Combobox(control_frame, textvariable=model_var, values=WHISPER_MODELS, state="readonly", width=22)
-model_combo.pack(fill=tk.X, padx=8, pady=(0, row_pad))
+model_label.grid(row=0, column=0, sticky='w', padx=8, pady=(row_pad, 0))
+model_var = tk.StringVar(value='base')
+model_combo = ttk.Combobox(control_frame, textvariable=model_var, values=WHISPER_MODELS, state="readonly", width=15)
+model_combo.grid(row=0, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
 # Устройство
 device_label = tk.Label(control_frame, text="Устройство:")
-device_label.pack(anchor='w', padx=8, pady=(row_pad, 0))
+device_label.grid(row=1, column=0, sticky='w', padx=8, pady=(row_pad, 0))
 device_var = tk.StringVar(value='CUDA' if torch.cuda.is_available() else 'CPU')
-device_combo = ttk.Combobox(control_frame, textvariable=device_var, values=['CUDA', 'CPU'], state="readonly", width=22)
-device_combo.pack(fill=tk.X, padx=8, pady=(0, row_pad))
+device_combo = ttk.Combobox(control_frame, textvariable=device_var, values=['CUDA', 'CPU'], state="readonly", width=15)
+device_combo.grid(row=1, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
 # Язык
 lang_label = tk.Label(control_frame, text="Язык распознавания:")
-lang_label.pack(anchor='w', padx=8, pady=(row_pad, 0))
-lang_var = ttk.Combobox(control_frame, values=[l[0] for l in LANGUAGES], state="readonly", width=22)
-lang_var.current(0)
-lang_var.pack(fill=tk.X, padx=8, pady=(0, row_pad))
+lang_label.grid(row=2, column=0, sticky='w', padx=8, pady=(row_pad, 0))
+lang_var = ttk.Combobox(control_frame, values=[l[0] for l in LANGUAGES], state="readonly", width=15)
+lang_var.current(1)  # 'Язык оригинала'
+lang_var.grid(row=2, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
 # Формат вывода
 output_format_label = tk.Label(control_frame, text="Формат выходного файла:")
-output_format_label.pack(anchor='w', padx=8, pady=(row_pad, 0))
-output_format_var = tk.StringVar(value='TXT файл')
+output_format_label.grid(row=3, column=0, sticky='w', padx=8, pady=(row_pad, 0))
+output_format_var = tk.StringVar(value='SRT файл (субтитры)')
 output_format_combo = ttk.Combobox(control_frame, textvariable=output_format_var, values=[f[0] for f in OUTPUT_FORMATS],
-                                   state="readonly", width=22)
-output_format_combo.current(0)
-output_format_combo.pack(fill=tk.X, padx=8, pady=(0, row_pad))
+                                   state="readonly", width=15)
+output_format_combo.current(1)
+output_format_combo.grid(row=3, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
 # Кнопка выбора файла
-select_button = tk.Button(control_frame, text="Выбрать видео/аудио файл",
-                          command=lambda: select_file(model_var, device_var, lang_var, output_format_var, status_label,
-                                                      result_text, root, select_button, info_console, progress_bar),
-                          width=25)  # Передача аргументов
-select_button.pack(padx=8, pady=(row_pad + 5, row_pad), fill=tk.X)
+select_button = ttk.Button(control_frame, text="Выбрать видео/аудио файл",
+                           command=lambda: select_file(model_var, device_var, lang_var, output_format_var, status_label,
+                                                       result_text, root, select_button, info_console, progress_bar,
+                                                       show_result_var))
+select_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad + 5, row_pad))
 
 # Статус
 status_label = tk.Label(control_frame, text="Ожидание выбора файла.")
-status_label.pack(padx=8, pady=(row_pad, row_pad), fill=tk.X)
+status_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
 
-# Ограничение высоты блока управления
-control_frame.update_idletasks()
-if control_frame.winfo_height() > max_control_height:
-    control_frame.config(height=max_control_height)
-    control_frame.pack_propagate(False)
+# --- Информационная консоль (в левой колонке) ---
+console_frame = tk.Frame(left_column_frame)  # Родитель - left_column_frame
+console_frame.grid(row=1, column=0, sticky="nsew", padx=0, pady=(10, 0))  # Размещаем под control_frame
+console_frame.grid_rowconfigure(0, weight=0)  # Прогресс-бар не расширяется
+console_frame.grid_rowconfigure(1, weight=1)  # Информационная консоль расширяется
+console_frame.grid_columnconfigure(0, weight=1)  # Единственная колонка расширяется
 
-# Поле для вывода результата с полосой прокрутки
-result_label = tk.Label(root, text="Результат распознавания:")
-result_label.pack(pady=(10, 0))
+# Прогресс-бар
+progress_bar = ttk.Progressbar(console_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
+progress_bar.grid(row=0, column=0, sticky="ew", padx=2, pady=2)  # Размещаем в сетке консольного фрейма
+progress_bar.grid_remove()  # Изначально скрываем прогресс-бар
 
-text_height = max(8, int((win_height - max_control_height - 50 - 60) // 20))  # -60 for console height
-text_width = max(40, int(win_width // 8))
+# Информационная консоль
+scrollbar_console = ttk.Scrollbar(console_frame, orient=tk.VERTICAL)
+info_console = tk.Text(console_frame, bg=THEME_DARK['console_bg'], fg=THEME_DARK['console_fg'],
+                       state=tk.DISABLED, font=("Consolas", 10), wrap=tk.WORD,
+                       borderwidth=0, highlightthickness=0, yscrollcommand=scrollbar_console.set)
 
-result_frame = tk.Frame(root)
-result_frame.pack(padx=10, pady=5, fill=tk.BOTH, expand=True)
+scrollbar_console.config(command=info_console.yview)
+scrollbar_console.grid(row=1, column=1, sticky="ns")  # Размещаем сбоку от текстового поля консоли
+info_console.grid(row=1, column=0, sticky="nsew", padx=(0, 0), pady=(0, 0))  # Размещаем в сетке консольного фрейма
 
-scrollbar_result = ttk.Scrollbar(result_frame, orient=tk.VERTICAL)  # Изменено на ttk.Scrollbar
-result_text = tk.Text(result_frame, wrap=tk.WORD, height=text_height, width=text_width,
-                      yscrollcommand=scrollbar_result.set)
+# --- Правая колонка: Чекбокс и поле результата ---
+result_container_frame = tk.Frame(root)  # Родитель - root
+result_container_frame.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=(4, 8),
+                            pady=8)  # Занимает 2 строки, правую колонку
+result_container_frame.grid_rowconfigure(2, weight=1)  # Текстовое поле будет расширяться
+result_container_frame.grid_columnconfigure(0, weight=1)  # Единственная колонка расширяется
+
+# Чекбокс для управления выводом результата
+show_result_var = tk.BooleanVar(value=True)
+
+
+def toggle_result_display():
+    if show_result_var.get():
+        result_text.config(state=tk.NORMAL)
+        result_text.delete(1.0, tk.END)  # Очищаем при активации
+        result_label.config(fg=THEME_DARK['fg'])  # Возвращаем нормальный цвет
+    else:
+        result_text.delete(1.0, tk.END)
+        result_text.config(state=tk.DISABLED)
+        result_label.config(fg=THEME_DARK['status_fg'])  # Делаем серым
+
+
+show_result_checkbox = ttk.Checkbutton(result_container_frame, text="Отображать результат транскрипции",
+                                       variable=show_result_var, command=toggle_result_display)
+show_result_checkbox.grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+result_label = tk.Label(result_container_frame, text="Результат распознавания:")
+result_label.grid(row=1, column=0, sticky="w", pady=(0, 5))
+
+result_frame = tk.Frame(result_container_frame)  # Родитель - result_container_frame
+result_frame.grid(row=2, column=0, sticky="nsew", padx=(0, 0))
+result_frame.grid_columnconfigure(0, weight=1)  # Позволяет result_text расширяться по горизонтали
+result_frame.grid_rowconfigure(0, weight=1)  # Позволяет result_text расширяться по вертикали
+
+scrollbar_result = ttk.Scrollbar(result_frame, orient=tk.VERTICAL)
+result_text = tk.Text(result_frame, wrap=tk.WORD, yscrollcommand=scrollbar_result.set)
 scrollbar_result.config(command=result_text.yview)
-scrollbar_result.pack(side=tk.RIGHT, fill=tk.Y)
-result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+scrollbar_result.grid(row=0, column=1, sticky="ns")  # Размещаем сбоку от текстового поля
+result_text.grid(row=0, column=0, sticky="nsew")  # Размещаем текстовое поле
 
 # Прокрутка колесом мыши для поля результата
 result_text.bind('<Enter>', lambda e: result_text.bind_all('<MouseWheel>', lambda ev: result_text.yview_scroll(
     int(-1 * (ev.delta / 120)), 'units')))
 result_text.bind('<Leave>', lambda e: result_text.unbind_all('<MouseWheel>'))
 
-# --- Информационная консоль (7 строк, темный фон, зеленый текст) ---
-console_frame = tk.Frame(root)
-console_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
-
-progress_bar = ttk.Progressbar(console_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
-progress_bar.pack_forget()  # Изначально скрываем прогресс-бар
-
-scrollbar_console = ttk.Scrollbar(console_frame, orient=tk.VERTICAL)  # Добавлена полоса прокрутки
-info_console = tk.Text(console_frame, height=7, bg=THEME_DARK['console_bg'], fg=THEME_DARK['console_fg'],
-                       state=tk.DISABLED, font=("Consolas", 10), wrap=tk.WORD,
-                       borderwidth=0, highlightthickness=0, yscrollcommand=scrollbar_console.set)
-scrollbar_console.config(command=info_console.yview)
-
-scrollbar_console.pack(side=tk.RIGHT, fill=tk.Y)
-info_console.pack(fill=tk.BOTH, expand=True)
-
 # Применить темную тему по умолчанию
-apply_dark_theme()
+apply_dark_theme(root,
+                 {'model_label': model_label, 'device_label': device_label, 'lang_label': lang_label,
+                  'output_format_label': output_format_label, 'status_label': status_label,
+                  'select_button': select_button, 'show_result_checkbox': show_result_checkbox},
+                 {'result_label': result_label, 'result_text': result_text},
+                 {'info_console': info_console, 'progress_bar': progress_bar})
+
+# Проверка наличия моделей при запуске (теперь вызывается после создания info_console)
+for model_name in WHISPER_MODELS:
+    if not check_model_in_cache(model_name):
+        log_console(info_console,
+                    f"Модель Whisper '{model_name}' не найдена в кэше. Она будет загружена автоматически при первом использовании (требуется интернет-соединение).")
+if not torch.cuda.is_available():
+    log_console(info_console,
+                "CUDA-совместимое устройство не обнаружено. Будет использоваться CPU (может быть медленнее).")
+
+# Установить начальное состояние поля результата
+toggle_result_display()
 
 root.mainloop()
