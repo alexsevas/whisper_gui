@@ -82,6 +82,14 @@ def is_audio_file(filepath):
     return filepath.lower().endswith(audio_exts)
 
 
+# --- Проверка наличия модели в кэше Whisper ---
+def check_model_in_cache(model_name):
+    # Whisper по умолчанию сохраняет модели в ~/.cache/whisper/
+    cache_dir = os.path.join(os.path.expanduser("~/"), ".cache", "whisper")
+    model_path = os.path.join(cache_dir, f"{model_name}.pt")
+    return os.path.exists(model_path)
+
+
 def format_timedelta(seconds):
     minutes = int(seconds // 60)
     remaining_seconds = int(seconds % 60)
@@ -121,7 +129,6 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         status_label.config(text="Расшифровка аудио...")
         log_console(info_console, "Распознавание речи...")
 
-        # progress_bar['value'] = 0 # Сбрасываем прогресс-бар
         progress_bar.pack(fill=tk.X, padx=2, pady=2)  # Делаем прогресс-бар видимым
         progress_bar.start()  # Запускаем неопределенный прогресс-бар
 
@@ -265,6 +272,15 @@ def apply_dark_theme():
                     bordercolor=theme['entry_bg']
                     )
 
+    # Проверка наличия моделей при запуске
+    for model_name in WHISPER_MODELS:
+        if not check_model_in_cache(model_name):
+            log_console(info_console,
+                        f"Модель Whisper '{model_name}' не найдена в кэше. Она будет загружена автоматически при первом использовании (требуется интернет-соединение).")
+    if not torch.cuda.is_available():
+        log_console(info_console,
+                    "CUDA-совместимое устройство не обнаружено. Будет использоваться CPU (может быть медленнее).")
+
 
 # Компактный блок управления (до 40% высоты окна)
 max_control_height = int(win_height * 0.4)
@@ -345,7 +361,7 @@ result_text.bind('<Enter>', lambda e: result_text.bind_all('<MouseWheel>', lambd
     int(-1 * (ev.delta / 120)), 'units')))
 result_text.bind('<Leave>', lambda e: result_text.unbind_all('<MouseWheel>'))
 
-# --- Информационная консоль (4 строки, темный фон, зеленый текст) ---
+# --- Информационная консоль (7 строк, темный фон, зеленый текст) ---
 console_frame = tk.Frame(root)
 console_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
 
@@ -353,7 +369,7 @@ progress_bar = ttk.Progressbar(console_frame, orient=tk.HORIZONTAL, length=100, 
 progress_bar.pack_forget()  # Изначально скрываем прогресс-бар
 
 scrollbar_console = ttk.Scrollbar(console_frame, orient=tk.VERTICAL)  # Добавлена полоса прокрутки
-info_console = tk.Text(console_frame, height=4, bg=THEME_DARK['console_bg'], fg=THEME_DARK['console_fg'],
+info_console = tk.Text(console_frame, height=7, bg=THEME_DARK['console_bg'], fg=THEME_DARK['console_fg'],
                        state=tk.DISABLED, font=("Consolas", 10), wrap=tk.WORD,
                        borderwidth=0, highlightthickness=0, yscrollcommand=scrollbar_console.set)
 scrollbar_console.config(command=info_console.yview)
