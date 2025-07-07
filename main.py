@@ -10,16 +10,23 @@ from threading import Thread
 import time
 from datetime import datetime
 
+# class ProgressHandler:
+#     def __init__(self, progress_bar, root):
+#         self.progress_bar = progress_bar
+#         self.root = root
+
+#     def __call__(self, progress):
+#         # Прогресс от whisper обычно от 0 до 1, преобразуем в 0-100
+#         # self.progress_bar['value'] = progress * 100 # Этот параметр не используется в indeterminate режиме
+#         self.root.update_idletasks() # Обновляем GUI
 
 WHISPER_MODELS = [
     'tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3', 'turbo'
 ]
-
 LANGUAGES = [
     ('Русский', 'ru'),
     ('Язык оригинала', None)
 ]
-
 OUTPUT_FORMATS = [
     ('TXT файл', 'txt'),
     ('SRT файл (субтитры)', 'srt')
@@ -90,7 +97,7 @@ def to_srt_time(seconds):
 
 
 def process_video_or_audio(file_path, model_name, device, language_code, output_format_ext, status_label, result_text,
-                           root, select_button, info_console):
+                           root, select_button, info_console, progress_bar):
     try:
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         dir_name = os.path.dirname(file_path)
@@ -113,6 +120,12 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
 
         status_label.config(text="Расшифровка аудио...")
         log_console(info_console, "Распознавание речи...")
+
+        # progress_bar['value'] = 0 # Сбрасываем прогресс-бар
+        progress_bar.pack(fill=tk.X, padx=2, pady=2)  # Делаем прогресс-бар видимым
+        progress_bar.start()  # Запускаем неопределенный прогресс-бар
+
+        # progress_handler = ProgressHandler(progress_bar, root)
         transcribe_result = transcribe_audio(audio_path, model_name, device, language_code)
 
         # Output to GUI Text field
@@ -148,11 +161,13 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         if audio_path_to_delete and os.path.exists(audio_path_to_delete):
             os.remove(audio_path_to_delete)
         root.title("Преобразовать видео/аудио --> текст")
+        progress_bar.pack_forget()  # Скрываем прогресс-бар
+        progress_bar.stop()  # Останавливаем прогресс-бар
         root.after(100, lambda: select_button.config(state=tk.NORMAL))
 
 
 def select_file(model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
-                info_console):
+                info_console, progress_bar):
     filetypes = [
         (
         "Видео/Аудио файлы", "*.mp4;*.avi;*.mov;*.mkv;*.webm;*.mp3;*.wav;*.m4a;*.flac;*.ogg;*.opus;*.mpga;*.aac;*.wma"),
@@ -180,7 +195,7 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
 
         Thread(target=process_video_or_audio, args=(
         file_path, model_name, device, language_code, output_format_ext, status_label, result_text, root, select_button,
-        info_console), daemon=True).start()
+        info_console, progress_bar), daemon=True).start()
 
 
 # --- Интерфейс ---
@@ -244,6 +259,11 @@ def apply_dark_theme():
     result_label.configure(bg=theme['bg'], fg=theme['fg'])
     result_text.configure(bg=theme['text_bg'], fg=theme['text_fg'], insertbackground=theme['fg'])
     info_console.configure(bg=theme['console_bg'], fg=theme['console_fg'])
+    style.configure('TProgressbar',
+                    background=theme['select_bg'],  # Цвет заполнения прогресс-бара
+                    troughcolor=theme['entry_bg'],  # Цвет фона прогресс-бара
+                    bordercolor=theme['entry_bg']
+                    )
 
 
 # Компактный блок управления (до 40% высоты окна)
@@ -289,7 +309,7 @@ output_format_combo.pack(fill=tk.X, padx=8, pady=(0, row_pad))
 # Кнопка выбора файла
 select_button = tk.Button(control_frame, text="Выбрать видео/аудио файл",
                           command=lambda: select_file(model_var, device_var, lang_var, output_format_var, status_label,
-                                                      result_text, root, select_button, info_console),
+                                                      result_text, root, select_button, info_console, progress_bar),
                           width=25)  # Передача аргументов
 select_button.pack(padx=8, pady=(row_pad + 5, row_pad), fill=tk.X)
 
@@ -328,6 +348,9 @@ result_text.bind('<Leave>', lambda e: result_text.unbind_all('<MouseWheel>'))
 # --- Информационная консоль (4 строки, темный фон, зеленый текст) ---
 console_frame = tk.Frame(root)
 console_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=(0, 4))
+
+progress_bar = ttk.Progressbar(console_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
+progress_bar.pack_forget()  # Изначально скрываем прогресс-бар
 
 scrollbar_console = ttk.Scrollbar(console_frame, orient=tk.VERTICAL)  # Добавлена полоса прокрутки
 info_console = tk.Text(console_frame, height=4, bg=THEME_DARK['console_bg'], fg=THEME_DARK['console_fg'],
