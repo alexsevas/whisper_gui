@@ -195,9 +195,15 @@ def transcribe_audio(audio_path, model_name, device, language_code):
     return result
 
 
-def is_audio_file(filepath):
-    audio_exts = ('.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.mpga', '.aac', '.wma')
-    return filepath.lower().endswith(audio_exts)
+def is_media_file(filepath):
+    media_exts = (
+    '.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.webm', '.mpga', '.aac', '.wma', '.mp4', '.avi', '.mov', '.mkv')
+    return filepath.lower().endswith(media_exts)
+
+
+def _is_only_audio_file(filepath):
+    audio_only_exts = ('.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.mpga', '.aac', '.wma')
+    return filepath.lower().endswith(audio_only_exts)
 
 
 # --- Проверка наличия модели в кэше Whisper ---
@@ -235,14 +241,18 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         start_time = time.time()
 
         audio_path_to_delete = None
-        if is_audio_file(file_path):
+        if _is_only_audio_file(file_path):
             audio_path = file_path
-        else:
+        elif is_media_file(file_path):
             audio_path = os.path.join(dir_name, base_name + "_audio.wav")
             audio_path_to_delete = audio_path  # Mark for deletion only if extracted
             status_label.config(text="Извлечение аудио...")
             log_console(info_console, "Извлечение аудиодорожки из видео...")
             extract_audio(file_path, audio_path)
+        else:
+            # This case implies it's not a supported media file, which should ideally be caught earlier
+            # For robustness, we'll raise an error here if an unsupported file type reaches this point
+            raise ValueError(f"Неподдерживаемый тип файла: {file_path}")
 
         status_label.config(text="Расшифровка аудио...")
         log_console(info_console, f"Распознавание речи с использованием модели '{model_name}'...")
@@ -330,6 +340,65 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
         info_console, progress_bar, show_result_var), daemon=True).start()
 
 
+def select_folder_for_batch_processing(model_var, device_var, lang_var, output_format_var, status_label, result_text,
+                                       root, select_button, batch_button, info_console, progress_bar, show_result_var):
+    folder_path = filedialog.askdirectory(
+        title="Выберите папку для пакетной обработки"
+    )
+    if folder_path:
+        select_button.config(state=tk.DISABLED)
+        batch_button.config(state=tk.DISABLED)
+        status_label.config(text="Начало пакетной обработки...")
+        log_console(info_console, f"Выбрана папка для пакетной обработки: {folder_path}")
+
+        Thread(target=process_batch, args=(
+        folder_path, model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
+        batch_button, info_console, progress_bar, show_result_var), daemon=True).start()
+
+
+def process_batch(folder_path, model_var, device_var, lang_var, output_format_var, status_label, result_text, root,
+                  select_button, batch_button, info_console, progress_bar, show_result_var):
+    try:
+        audio_video_files = []
+        for root_dir, _, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root_dir, file)
+                if is_media_file(file_path):
+                    audio_video_files.append(file_path)
+
+        if not audio_video_files:
+            log_console(info_console, "В выбранной папке не найдено аудио/видео файлов.")
+            status_label.config(text="Готово. Нет файлов для обработки.")
+            return
+
+        total_files = len(audio_video_files)
+        for i, file_path in enumerate(audio_video_files):
+            log_console(info_console, f"\nОбработка файла {i + 1} из {total_files}: {os.path.basename(file_path)}")
+            status_label.config(text=f"Обработка файла {i + 1}/{total_files}...")
+            # Pass a unique select_button reference or handle enabling/disabling differently for batch
+            # For now, select_button and batch_button remain disabled until batch is complete
+            process_video_or_audio(file_path, model_var.get(),
+                                   'cuda' if device_var.get() == 'CUDA' else 'cpu',
+                                   next((code for name, code in LANGUAGES if name == lang_var.get()), None),
+                                   next((ext for name, ext in OUTPUT_FORMATS if name == output_format_var.get()), None),
+                                   status_label, result_text, root, select_button, info_console, progress_bar,
+                                   show_result_var)
+
+        log_console(info_console, "\nПакетная обработка завершена!")
+        status_label.config(text="Пакетная обработка завершена.")
+
+    except Exception as e:
+        status_label.config(text="Ошибка пакетной обработки!")
+        log_console(info_console, f"Ошибка пакетной обработки: {e}")
+        messagebox.showerror("Ошибка", f"Ошибка пакетной обработки: {e}")
+    finally:
+        root.title("Преобразовать видео/аудио --> текст")
+        select_button.config(state=tk.NORMAL)
+        batch_button.config(state=tk.NORMAL)
+        progress_bar.grid_remove()
+        progress_bar.stop()
+
+
 # --- Интерфейс ---
 root = tk.Tk()
 root.title("Преобразовать видео/аудио --> текст")
@@ -395,9 +464,18 @@ select_button = ttk.Button(control_frame, text="Выбрать видео/ауд
                                                        show_result_var))
 select_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad + 5, row_pad))
 
-# Статус
+# Новая кнопка для пакетной обработки
+batch_button = ttk.Button(control_frame, text="Добавить папку (пакетная обработка)",
+                          command=lambda: select_folder_for_batch_processing(model_var, device_var, lang_var,
+                                                                             output_format_var, status_label,
+                                                                             result_text, root, select_button,
+                                                                             batch_button, info_console, progress_bar,
+                                                                             show_result_var))
+batch_button.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
+
+# Статус (смещаем на новую строку)
 status_label = tk.Label(control_frame, text="Ожидание выбора файла.")
-status_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
+status_label.grid(row=6, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
 
 # --- Информационная консоль (в левой колонке) ---
 console_frame = tk.Frame(left_column_frame)  # Родитель - left_column_frame
@@ -470,7 +548,8 @@ result_text.bind('<Leave>', lambda e: result_text.unbind_all('<MouseWheel>'))
 apply_dark_theme(root,
                  {'model_label': model_label, 'device_label': device_label, 'lang_label': lang_label,
                   'output_format_label': output_format_label, 'status_label': status_label,
-                  'select_button': select_button, 'show_result_checkbox': show_result_checkbox},
+                  'select_button': select_button, 'show_result_checkbox': show_result_checkbox,
+                  'batch_button': batch_button},
                  {'result_label': result_label, 'result_text': result_text},
                  {'info_console': info_console, 'progress_bar': progress_bar})
 
