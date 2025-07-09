@@ -1,17 +1,15 @@
 # conda allpy310
-
 '''
-0 - см ящика
 -0 - Для отображения точного процента вам потребуется версия Whisper, которая поддерживает progress_callback
 +1 - инфо при загрузке о доступных моделях весов виспера с указанием их размещения;
 2 - добавить возможность указания папки с весами;
-+-3 - если веса отсутствуют - загрузка их с уведомлением об этом в консоли ( указание скорости загрузки, обьем весов и оставшееся время загрузки)
-4 - добавить меню в приложении - а там добавить пункт с информацией о разработчике
-5 - компилирование проекта в exe и инсталятор (с весами, или без)
++-3 - если веса отсутствуют - загрузка их с уведомлением об этом в консоли (указание скорости загрузки, объем весов и оставшееся время загрузки)
++4 - добавить меню в приложении - а там добавить пункт с информацией о разработчике
+5 - компилирование проекта в exe и инсталлятор (с весами, или без)
 6 - переписать весь интерфейс на flux или что-то, что выглядит в духе вин10 и вин11
 7 - в меню - инфо пункт про использование в вариантах CUDA и CPU (какие требования, что установить, какое железо, сколько
 видеопамяти (Dzen Download)), где обычно хранятся веса, какие особенности и нагрузки на систему
-
+8 - переделать под внутренний ffmpeg (через pip install)
 '''
 
 import os
@@ -43,12 +41,21 @@ THEME_DARK = {
     'button_fg': '#e0e0e0', 'text_bg': '#23272e', 'text_fg': '#e0e0e0', 'select_bg': '#3a4a5a', 'select_fg': '#fff',
     'status_fg': '#b0b0b0',
     'console_bg': '#101010', 'console_fg': '#00ff00',
+    'console_success_fg': '#00ff00',  # Зеленый для успешных сообщений
+    'console_error_fg': '#ff0000',  # Красный для ошибок
+    'console_highlight_fg': '#00FFFF',  # Голубой для выделения
     'scrollbar_bg': '#444b57', 'scrollbar_trough': '#2d323b', 'scrollbar_active': '#3a4a5a',
-    'combobox_arrow': '#e0e0e0'  # Цвет стрелки комбобокса
+    'combobox_arrow': '#e0e0e0',  # Цвет стрелки комбобокса
+    'menu_bg': '#2d323b',
+    'menu_fg': '#e0e0e0',
+    'menu_active_bg': '#3a4a5a',
+    'menu_active_fg': '#fff',
+    'menu_border': '#2d323b',
+    'menu_disabled_fg': '#777777'
 }
 
 
-def apply_dark_theme(root_widget, control_widgets, result_widgets, console_widgets):
+def apply_dark_theme(root_widget, control_widgets, result_widgets, console_widgets, menu_widgets):
     theme = THEME_DARK
     root_widget.configure(bg=theme['bg'])
 
@@ -135,14 +142,30 @@ def apply_dark_theme(root_widget, control_widgets, result_widgets, console_widge
     result_container_frame.configure(bg=theme['bg'])
     result_frame.configure(bg=theme['bg'])
 
+    # Apply colors to Tk Menus
+    menu_widgets['menubar'].configure(bg=theme['menu_bg'], fg=theme['menu_fg'],
+                                      activebackground=theme['menu_active_bg'],
+                                      activeforeground=theme['menu_active_fg'], borderwidth=0)
+    for menu in [menu_widgets['read_menu'], menu_widgets['about_menu']]:
+        menu.configure(bg=theme['menu_bg'], fg=theme['menu_fg'], activebackground=theme['menu_active_bg'],
+                       activeforeground=theme['menu_active_fg'], disabledforeground=theme['menu_disabled_fg'],
+                       borderwidth=0)
+
     # Проверка наличия моделей при запуске (теперь вызывается после создания info_console)
 
 
 # --- Функция для добавления сообщения в консоль ---
-def log_console(console_widget, message):
+def log_console(console_widget, segments):
     now = datetime.now().strftime('%H:%M:%S')
     console_widget.config(state=tk.NORMAL)
-    console_widget.insert(tk.END, f"{now} - {message}\n")
+
+    # Add timestamp with info_tag
+    console_widget.insert(tk.END, f"{now} - ", 'info_tag')
+
+    for text, tag_name in segments:
+        console_widget.insert(tk.END, text, tag_name)
+    console_widget.insert(tk.END, "\n")  # Add newline at the end
+
     console_widget.see(tk.END)
     console_widget.config(state=tk.DISABLED)
 
@@ -160,6 +183,7 @@ def get_window_size():
 
 
 win_width, win_height, screen_width, screen_height = get_window_size()
+win_width = 1200  # Устанавливаем фиксированную ширину окна
 
 
 # --- Основные функции ---
@@ -243,7 +267,7 @@ def to_srt_time(seconds):
 
 
 def process_video_or_audio(file_path, model_name, device, language_code, output_format_ext, status_label, result_text,
-                           root, select_button, info_console, progress_bar, show_result_var):
+                           root, select_button, info_console, progress_bar, show_result_var, batch_button):
     try:
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         dir_name = os.path.dirname(file_path)
@@ -251,7 +275,7 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         output_path = os.path.join(dir_name, output_filename)
 
         root.title(f"Распознаем: {os.path.basename(file_path)}")
-        log_console(info_console, "Подготовка файла...")
+        log_console(info_console, [("Подготовка файла...", 'info')])
         start_time = time.time()
 
         audio_path_to_delete = None
@@ -261,7 +285,7 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
             audio_path = os.path.join(dir_name, base_name + "_audio.wav")
             audio_path_to_delete = audio_path  # Mark for deletion only if extracted
             status_label.config(text="Извлечение аудио...")
-            log_console(info_console, "Извлечение аудиодорожки из видео...")
+            log_console(info_console, [("Извлечение аудиодорожки из видео...", 'info')])
             extract_audio(file_path, audio_path)
         else:
             # This case implies it's not a supported media file, which should ideally be caught earlier
@@ -269,7 +293,8 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
             raise ValueError(f"Неподдерживаемый тип файла: {file_path}")
 
         status_label.config(text="Расшифровка аудио...")
-        log_console(info_console, f"Распознавание речи с использованием модели '{model_name}'...")
+        log_console(info_console,
+                    [("Модель ", 'info_tag'), (model_name, 'highlight_tag'), (": Запуск распознавания...", 'info_tag')])
 
         # progress_bar.pack(fill=tk.X, padx=2, pady=2) # Делаем прогресс-бар видимым
         progress_bar.grid()  # Размещаем в сетке консольного фрейма
@@ -303,12 +328,18 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
 
         status_label.config(text="Готово!")
         elapsed = time.time() - start_time
-        log_console(info_console, f"Время распознавания текущего файла - {format_timedelta(elapsed)}")
-        log_console(info_console, f"Результат сохранён в: {os.path.basename(output_path)}")
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        seconds = int(elapsed % 60)
+        formatted_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        log_console(info_console, [("Выполнено за ", 'success_tag'), (formatted_time, 'highlight_tag')])
+        log_console(info_console,
+                    [("Результат сохранён в: ", 'success_tag'), (os.path.basename(output_path), 'highlight_tag')])
+        log_console(info_console, [("-" * 20, 'info_tag')])
 
     except Exception as e:
         status_label.config(text="Ошибка!")
-        log_console(info_console, str(e))
+        log_console(info_console, [("Ошибка: " + str(e), 'error')])
         messagebox.showerror("Ошибка", str(e))
     finally:
         if audio_path_to_delete and os.path.exists(audio_path_to_delete):
@@ -320,6 +351,7 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         # Устанавливаем конечное состояние result_text на основе чекбокса
         result_text.config(state=tk.DISABLED if not show_result_var.get() else tk.NORMAL)
         root.after(100, lambda: select_button.config(state=tk.NORMAL))
+        root.after(100, lambda: batch_button.config(state=tk.NORMAL))
 
 
 def select_file(model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
@@ -337,10 +369,11 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
     )
     if file_path:
         select_button.config(state=tk.DISABLED)
+        batch_button.config(state=tk.DISABLED)
         status_label.config(text="Обработка...")
-        log_console(info_console, "Файл выбран: " + os.path.basename(file_path))
+        log_console(info_console, [("Файл ", 'info_tag'), (os.path.basename(file_path), 'highlight_tag')])
         duration = get_media_duration(file_path)
-        log_console(info_console, f"Продолжительность файла: {duration}")
+        log_console(info_console, [("Продолжительность файла: ", 'info_tag'), (duration, 'highlight_tag')])
         model_name = model_var.get()
         device = 'cuda' if device_var.get() == 'CUDA' else 'cpu'
         selected_lang_name = lang_var.get()
@@ -351,7 +384,7 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
 
         Thread(target=process_video_or_audio, args=(
         file_path, model_name, device, language_code, output_format_ext, status_label, result_text, root, select_button,
-        info_console, progress_bar, show_result_var), daemon=True).start()
+        info_console, progress_bar, show_result_var, batch_button), daemon=True).start()
 
 
 def select_folder_for_batch_processing(model_var, device_var, lang_var, output_format_var, status_label, result_text,
@@ -363,7 +396,8 @@ def select_folder_for_batch_processing(model_var, device_var, lang_var, output_f
         select_button.config(state=tk.DISABLED)
         batch_button.config(state=tk.DISABLED)
         status_label.config(text="Начало пакетной обработки...")
-        log_console(info_console, f"Выбрана папка для пакетной обработки: {folder_path}")
+        log_console(info_console,
+                    [("Выбрана папка для пакетной обработки: ", 'info_tag'), (folder_path, 'highlight_tag')])
 
         Thread(target=process_batch, args=(
         folder_path, model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
@@ -381,29 +415,31 @@ def process_batch(folder_path, model_var, device_var, lang_var, output_format_va
                     audio_video_files.append(file_path)
 
         if not audio_video_files:
-            log_console(info_console, "В выбранной папке не найдено аудио/видео файлов.")
+            log_console(info_console, [("В выбранной папке не найдено аудио/видео файлов.", 'info_tag')])
             status_label.config(text="Готово. Нет файлов для обработки.")
             return
 
         total_files = len(audio_video_files)
+        log_console(info_console, [("Всего файлов для обработки: ", 'info_tag'), (str(total_files), 'highlight_tag')])
         for i, file_path in enumerate(audio_video_files):
-            log_console(info_console, f"\nОбработка файла {i + 1} из {total_files}: {os.path.basename(file_path)}")
+            log_console(info_console, [(f"{i + 1} из {total_files}", 'info_tag')])
+            duration = get_media_duration(file_path)
+            log_console(info_console, [("Продолжительность файла: ", 'info_tag'), (duration, 'highlight_tag')])
+            select_button.config(state=tk.DISABLED)
+            batch_button.config(state=tk.DISABLED)
             status_label.config(text=f"Обработка файла {i + 1}/{total_files}...")
-            # Pass a unique select_button reference or handle enabling/disabling differently for batch
-            # For now, select_button and batch_button remain disabled until batch is complete
             process_video_or_audio(file_path, model_var.get(),
                                    'cuda' if device_var.get() == 'CUDA' else 'cpu',
                                    next((code for name, code in LANGUAGES if name == lang_var.get()), None),
                                    next((ext for name, ext in OUTPUT_FORMATS if name == output_format_var.get()), None),
                                    status_label, result_text, root, select_button, info_console, progress_bar,
-                                   show_result_var)
-
-        log_console(info_console, "\nПакетная обработка завершена!")
+                                   show_result_var, batch_button)
         status_label.config(text="Пакетная обработка завершена.")
+        log_console(info_console, [("-" * 20, 'info_tag')])
 
     except Exception as e:
         status_label.config(text="Ошибка пакетной обработки!")
-        log_console(info_console, f"Ошибка пакетной обработки: {e}")
+        log_console(info_console, [("Ошибка пакетной обработки: " + str(e), 'error')])
         messagebox.showerror("Ошибка", f"Ошибка пакетной обработки: {e}")
     finally:
         root.title("Преобразовать видео/аудио --> текст")
@@ -413,22 +449,47 @@ def process_batch(folder_path, model_var, device_var, lang_var, output_format_va
         progress_bar.stop()
 
 
+# --- Функции заглушки для меню ---
+def read_this():
+    messagebox.showinfo("Read Me",
+                        "Нажмите 'Выбрать видео/аудио файл', чтобы выбрать файл для обработки.\n\n Вы можете выбрать: модель Whisper, устройство (CUDA если доступно, иначе CPU), язык распознавания (Язык оригинала для автоматического определения) и формат выходного файла (TXT или SRT).\n\n Для пакетной обработки нажмите 'Добавить папку (пакетная обработка)'.")
+
+
+def about_program():
+    messagebox.showinfo("About",
+                        "Программа для транскрибации аудио/видео файлов в текст с использованием Whisper.\n\nРазработчик: alexsevas\n\nemail: a1exsevas@yandex.ru.\n\nВерсия: 0.1")
+
+
 # --- Интерфейс ---
 root = tk.Tk()
 root.title("Преобразовать видео/аудио --> текст")
 root.geometry(f"{win_width}x{win_height}+{(screen_width - win_width) // 2}+{(screen_height - win_height) // 2}")
 
+# Создание главного меню
+menubar = tk.Menu(root)
+root.config(menu=menubar)
+
+# Меню "Прочти это"
+read_menu = tk.Menu(menubar, tearoff=0)
+menubar.add_cascade(label="Read Me", menu=read_menu)
+read_menu.add_command(label="Открыть", command=read_this)
+
+# Меню "О программе"
+about_menu = tk.Menu(menubar, tearoff=0)
+menubar.add_cascade(label="About", menu=about_menu)
+about_menu.add_command(label="Показать информацию", command=about_program)
+
 # Настройка колонок и строк корневого окна
-root.grid_columnconfigure(0, weight=0)  # Левая колонка (элементы управления + консоль) - не расширяется сильно
+root.grid_columnconfigure(0, weight=0)
 root.grid_columnconfigure(1, weight=1)  # Правая колонка (результат) - расширяется
 root.grid_rowconfigure(0,
                        weight=0)  # Верхняя строка (элементы управления в левой, чекбокс/лейбл в правой) - не расширяется сильно
 root.grid_rowconfigure(1, weight=1)  # Нижняя строка (консоль в левой, текстовое поле в правой) - расширяется
 
 # --- Левая колонка: Элементы управления и Информационная консоль ---
-left_column_frame = tk.Frame(root)  # Создаем фрейм для левой колонки
-left_column_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(5, 3),
-                       pady=8)  # Занимает 2 строки, левую колонку
+left_column_frame = tk.Frame(root, width=500)  # Создаем фрейм для левой колонки
+left_column_frame.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(5, 3), pady=8)
+left_column_frame.grid_propagate(False)  # Отключаем автоматическое изменение размера
 left_column_frame.grid_rowconfigure(0, weight=0)  # Верхняя часть (control_frame) - не расширяется
 left_column_frame.grid_rowconfigure(1, weight=1)  # Нижняя часть (console_frame) - расширяется
 left_column_frame.grid_columnconfigure(0, weight=1)  # Единственная колонка в left_column_frame расширяется
@@ -444,7 +505,7 @@ row_pad = 2
 # Модель Whisper
 model_label = tk.Label(control_frame, text="Модель Whisper:")
 model_label.grid(row=0, column=0, sticky='w', padx=8, pady=(row_pad, 0))
-model_var = tk.StringVar(value='base')
+model_var = tk.StringVar(value='medium')
 model_combo = ttk.Combobox(control_frame, textvariable=model_var, values=WHISPER_MODELS, state="readonly", width=15)
 model_combo.grid(row=0, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
@@ -465,10 +526,10 @@ lang_var.grid(row=2, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 # Формат вывода
 output_format_label = tk.Label(control_frame, text="Формат выходного файла:")
 output_format_label.grid(row=3, column=0, sticky='w', padx=8, pady=(row_pad, 0))
-output_format_var = tk.StringVar(value='SRT файл (субтитры)')
+output_format_var = tk.StringVar(value='TXT файл')
 output_format_combo = ttk.Combobox(control_frame, textvariable=output_format_var, values=[f[0] for f in OUTPUT_FORMATS],
                                    state="readonly", width=15)
-output_format_combo.current(1)
+output_format_combo.current(0)
 output_format_combo.grid(row=3, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
 # Кнопка выбора файла
@@ -512,6 +573,12 @@ info_console = tk.Text(console_frame, bg=THEME_DARK['console_bg'], fg=THEME_DARK
 scrollbar_console.config(command=info_console.yview)
 scrollbar_console.grid(row=1, column=1, sticky="ns")  # Размещаем сбоку от текстового поля консоли
 info_console.grid(row=1, column=0, sticky="nsew", padx=(0, 0), pady=(0, 0))  # Размещаем в сетке консольного фрейма
+
+# Настройка тегов для цветов сообщений консоли
+info_console.tag_config('info_tag', foreground=THEME_DARK['console_fg'])
+info_console.tag_config('success_tag', foreground=THEME_DARK['console_success_fg'])
+info_console.tag_config('error_tag', foreground=THEME_DARK['console_error_fg'])
+info_console.tag_config('highlight_tag', foreground=THEME_DARK['console_highlight_fg'])
 
 # --- Правая колонка: Чекбокс и поле результата ---
 result_container_frame = tk.Frame(root)  # Родитель - root
@@ -565,16 +632,24 @@ apply_dark_theme(root,
                   'select_button': select_button, 'show_result_checkbox': show_result_checkbox,
                   'batch_button': batch_button},
                  {'result_label': result_label, 'result_text': result_text},
-                 {'info_console': info_console, 'progress_bar': progress_bar})
+                 {'info_console': info_console, 'progress_bar': progress_bar},
+                 {'menubar': menubar, 'read_menu': read_menu, 'about_menu': about_menu})
 
 # Проверка наличия моделей при запуске (теперь вызывается после создания info_console)
-for model_name in WHISPER_MODELS:
-    if not check_model_in_cache(model_name):
-        log_console(info_console,
-                    f"Модель Whisper '{model_name}' не найдена в кэше. Она будет загружена автоматически при первом использовании (требуется интернет-соединение).")
 if not torch.cuda.is_available():
-    log_console(info_console,
-                "CUDA-совместимое устройство не обнаружено. Будет использоваться CPU (может быть медленнее).")
+    log_console(info_console, [
+        ("CUDA-совместимое устройство не обнаружено. Будет использоваться CPU (может быть медленнее).", 'info')])
+
+# Проверка наличия моделей при запуске
+log_console(info_console, [("Проверка наличия моделей Whisper в кэше:", 'info')])
+for model_name in WHISPER_MODELS:
+    if check_model_in_cache(model_name):
+        log_console(info_console,
+                    [("Модель '", 'info_tag'), (model_name, 'highlight_tag'), ("' найдена в кэше.", 'success_tag')])
+    else:
+        log_console(info_console, [("Модель '", 'error_tag'), (model_name, 'highlight_tag'), (
+        "' НЕ найдена в кэше. Она будет загружена автоматически при первом использовании.", 'error_tag')])
+log_console(info_console, [("-" * 20, 'info_tag')])
 
 # Установить начальное состояние поля результата
 toggle_result_display()
