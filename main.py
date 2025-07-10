@@ -9,7 +9,7 @@
 6 - переписать весь интерфейс на flux или что-то, что выглядит в духе вин10 и вин11
 7 - в меню - инфо пункт про использование в вариантах CUDA и CPU (какие требования, что установить, какое железо, сколько
 видеопамяти (Dzen Download)), где обычно хранятся веса, какие особенности и нагрузки на систему
-8 - переделать под внутренний ffmpeg (через pip install)
++8 - переделать под внутренний ffmpeg (через pip install ffmpeg-python)
 '''
 
 import os
@@ -22,6 +22,7 @@ from threading import Thread
 import time
 from datetime import datetime
 from typing import Dict, Any
+import ffmpeg as ffmpeg_module
 
 WHISPER_MODELS = [
     'tiny', 'base', 'small', 'medium', 'large', 'large-v2', 'large-v3', 'turbo'
@@ -177,7 +178,7 @@ def get_window_size():
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
     win_width = int(screen_width * 0.8)
-    win_height = int(screen_height * 0.8)
+    win_height = int(screen_height * 0.6)
     root.destroy()
     return win_width, win_height, screen_width, screen_height
 
@@ -189,39 +190,27 @@ win_width = 1200  # Устанавливаем фиксированную шир
 # --- Основные функции ---
 def get_media_duration(file_path):
     try:
-        command = [
-            'ffmpeg', '-i', file_path, '-hide_banner'
-        ]
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-        duration_line = ""
-        for line in result.stderr.splitlines():
-            if "Duration:" in line:
-                duration_line = line
-                break
-
-        if duration_line:
-            # Example: Duration: 00:00:04.60, start: 0.000000, bitrate: 72 kb/s
-            parts = duration_line.split('Duration: ')[1].split(',')[0].strip().split(':')
-            if len(parts) == 3:
-                hours = int(parts[0])
-                minutes = int(parts[1])
-                seconds_and_ms = float(parts[2])
-                seconds = int(seconds_and_ms)
-
-                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        return "N/A"
+        info = ffmpeg_module.probe(file_path)
+        duration = float(info['format']['duration'])
+        hours = int(duration // 3600)
+        minutes = int((duration % 3600) // 60)
+        seconds = int(duration % 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     except Exception as e:
         return f"Ошибка при получении длительности: {e}"
 
 
 def extract_audio(video_path, audio_path):
-    command = [
-        'ffmpeg', '-y', '-i', video_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', audio_path
-    ]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode != 0:
-        raise RuntimeError(f"Ошибка при извлечении аудио: {result.stderr.decode()}")
+    try:
+        (
+            ffmpeg_module
+            .input(video_path)
+            .output(audio_path, vn=None, acodec='pcm_s16le', ar='16000', ac=1)
+            .overwrite_output()
+            .run(quiet=True)
+        )
+    except Exception as e:
+        raise RuntimeError(f"Ошибка при извлечении аудио: {str(e)}")
 
 
 def transcribe_audio(audio_path, model_name, device, language_code):
@@ -451,13 +440,13 @@ def process_batch(folder_path, model_var, device_var, lang_var, output_format_va
 
 # --- Функции заглушки для меню ---
 def read_this():
-    messagebox.showinfo("Read Me",
-                        "Нажмите 'Выбрать видео/аудио файл', чтобы выбрать файл для обработки.\n\n Вы можете выбрать: модель Whisper, устройство (CUDA если доступно, иначе CPU), язык распознавания (Язык оригинала для автоматического определения) и формат выходного файла (TXT или SRT).\n\n Для пакетной обработки нажмите 'Добавить папку (пакетная обработка)'.")
+    messagebox.showinfo("Прочти это",
+                        "Нажмите 'Выбрать видео/аудио файл', чтобы выбрать файл для обработки. Вы можете выбрать модель Whisper, устройство (CUDA если доступно, иначе CPU), язык распознавания (Язык оригинала для автоматического определения) и формат выходного файла (TXT или SRT). Для пакетной обработки нажмите 'Добавить папку (пакетная обработка)'.")
 
 
 def about_program():
-    messagebox.showinfo("About",
-                        "Программа для транскрибации аудио/видео файлов в текст с использованием Whisper.\n\nРазработчик: alexsevas\n\nemail: a1exsevas@yandex.ru.\n\nВерсия: 0.1")
+    messagebox.showinfo("О программе",
+                        "Программа для транскрибации аудио/видео файлов в текст с использованием технологии Whisper.\n\nРазработчик: alexsevas,\n\nemail: a1exsevas@yandex.ru.\n\nВерсия: 0.1")
 
 
 # --- Интерфейс ---
@@ -471,12 +460,12 @@ root.config(menu=menubar)
 
 # Меню "Прочти это"
 read_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="Read Me", menu=read_menu)
+menubar.add_cascade(label="Прочти это", menu=read_menu)
 read_menu.add_command(label="Открыть", command=read_this)
 
 # Меню "О программе"
 about_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="About", menu=about_menu)
+menubar.add_cascade(label="О программе", menu=about_menu)
 about_menu.add_command(label="Показать информацию", command=about_program)
 
 # Настройка колонок и строк корневого окна
