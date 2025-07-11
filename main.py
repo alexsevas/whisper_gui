@@ -2,18 +2,20 @@
 '''
 -0 - Для отображения точного процента вам потребуется версия Whisper, которая поддерживает progress_callback
 +1 - инфо при загрузке о доступных моделях весов виспера с указанием их размещения;
-2 - добавить возможность указания папки с весами;
-+-3 - если веса отсутствуют - загрузка их с уведомлением об этом в консоли (указание скорости загрузки, объем весов и оставшееся время загрузки)
++2 - добавить возможность указания папки с весами;
++3 - если веса отсутствуют - загрузка их с уведомлением об этом в консоли (указание скорости загрузки, объем весов и оставшееся время загрузки)
 +4 - добавить меню в приложении - а там добавить пункт с информацией о разработчике
 5 - компилирование проекта в exe и инсталлятор (с весами, или без)
 6 - переписать весь интерфейс на flux или что-то, что выглядит в духе вин10 и вин11
 7 - в меню - инфо пункт про использование в вариантах CUDA и CPU (какие требования, что установить, какое железо, сколько
 видеопамяти (Dzen Download)), где обычно хранятся веса, какие особенности и нагрузки на систему
 +8 - переделать под внутренний ffmpeg (через pip install ffmpeg-python)
+-9 - добавить возможность ставить на паузу при обработке большого объема файлов и сохранение текущего прогресса, чтобы при возобновлении
+процесс начинался с того файла, на котором закончился, а также защиты от повторной обработки тех файлов, что уже обработаны.
+-10 - интерфейс: информационные сообщения при задержке курсора над элементами интерфейса с подсказкой что-почему-итд
 '''
 
 import os
-import subprocess
 import torch
 import whisper
 import tkinter as tk
@@ -256,7 +258,8 @@ def to_srt_time(seconds):
 
 
 def process_video_or_audio(file_path, model_name, device, language_code, output_format_ext, status_label, result_text,
-                           root, select_button, info_console, progress_bar, show_result_var, batch_button):
+                           root, select_button, info_console, progress_bar, show_result_var, batch_button,
+                           select_weights_button):
     try:
         base_name = os.path.splitext(os.path.basename(file_path))[0]
         dir_name = os.path.dirname(file_path)
@@ -341,10 +344,11 @@ def process_video_or_audio(file_path, model_name, device, language_code, output_
         result_text.config(state=tk.DISABLED if not show_result_var.get() else tk.NORMAL)
         root.after(100, lambda: select_button.config(state=tk.NORMAL))
         root.after(100, lambda: batch_button.config(state=tk.NORMAL))
+        root.after(100, lambda: select_weights_button.config(state=tk.NORMAL))
 
 
 def select_file(model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
-                info_console, progress_bar, show_result_var):
+                info_console, progress_bar, show_result_var, batch_button, select_weights_button):
     filetypes = [
         (
         "Видео/Аудио файлы", "*.mp4;*.avi;*.mov;*.mkv;*.webm;*.mp3;*.wav;*.m4a;*.flac;*.ogg;*.opus;*.mpga;*.aac;*.wma"),
@@ -359,6 +363,7 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
     if file_path:
         select_button.config(state=tk.DISABLED)
         batch_button.config(state=tk.DISABLED)
+        select_weights_button.config(state=tk.DISABLED)
         status_label.config(text="Обработка...")
         log_console(info_console, [("Файл ", 'info_tag'), (os.path.basename(file_path), 'highlight_tag')])
         duration = get_media_duration(file_path)
@@ -373,28 +378,30 @@ def select_file(model_var, device_var, lang_var, output_format_var, status_label
 
         Thread(target=process_video_or_audio, args=(
         file_path, model_name, device, language_code, output_format_ext, status_label, result_text, root, select_button,
-        info_console, progress_bar, show_result_var, batch_button), daemon=True).start()
+        info_console, progress_bar, show_result_var, batch_button, select_weights_button), daemon=True).start()
 
 
 def select_folder_for_batch_processing(model_var, device_var, lang_var, output_format_var, status_label, result_text,
-                                       root, select_button, batch_button, info_console, progress_bar, show_result_var):
+                                       root, select_button, batch_button, info_console, progress_bar, show_result_var,
+                                       select_weights_button):
     folder_path = filedialog.askdirectory(
         title="Выберите папку для пакетной обработки"
     )
     if folder_path:
         select_button.config(state=tk.DISABLED)
         batch_button.config(state=tk.DISABLED)
+        select_weights_button.config(state=tk.DISABLED)
         status_label.config(text="Начало пакетной обработки...")
         log_console(info_console,
                     [("Выбрана папка для пакетной обработки: ", 'info_tag'), (folder_path, 'highlight_tag')])
 
         Thread(target=process_batch, args=(
         folder_path, model_var, device_var, lang_var, output_format_var, status_label, result_text, root, select_button,
-        batch_button, info_console, progress_bar, show_result_var), daemon=True).start()
+        batch_button, info_console, progress_bar, show_result_var, select_weights_button), daemon=True).start()
 
 
 def process_batch(folder_path, model_var, device_var, lang_var, output_format_var, status_label, result_text, root,
-                  select_button, batch_button, info_console, progress_bar, show_result_var):
+                  select_button, batch_button, info_console, progress_bar, show_result_var, select_weights_button):
     try:
         audio_video_files = []
         for root_dir, _, files in os.walk(folder_path):
@@ -422,7 +429,7 @@ def process_batch(folder_path, model_var, device_var, lang_var, output_format_va
                                    next((code for name, code in LANGUAGES if name == lang_var.get()), None),
                                    next((ext for name, ext in OUTPUT_FORMATS if name == output_format_var.get()), None),
                                    status_label, result_text, root, select_button, info_console, progress_bar,
-                                   show_result_var, batch_button)
+                                   show_result_var, batch_button, select_weights_button)
         status_label.config(text="Пакетная обработка завершена.")
         log_console(info_console, [("-" * 20, 'info_tag')])
 
@@ -434,6 +441,7 @@ def process_batch(folder_path, model_var, device_var, lang_var, output_format_va
         root.title("Преобразовать видео/аудио --> текст")
         select_button.config(state=tk.NORMAL)
         batch_button.config(state=tk.NORMAL)
+        select_weights_button.config(state=tk.NORMAL)
         progress_bar.grid_remove()
         progress_bar.stop()
 
@@ -447,6 +455,57 @@ def read_this():
 def about_program():
     messagebox.showinfo("О программе",
                         "Программа для транскрибации аудио/видео файлов в текст с использованием технологии Whisper.\n\nРазработчик: alexsevas,\n\nemail: a1exsevas@yandex.ru.\n\nВерсия: 0.1")
+
+
+# --- Глобальная переменная для папки с весами ---
+DEFAULT_WEIGHTS_DIR = os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+current_weights_dir = DEFAULT_WEIGHTS_DIR
+
+# Список моделей и соответствующих файлов
+MODEL_FILE_MAP = {name: f"{name}.pt" for name in WHISPER_MODELS}
+
+
+def scan_weights_folder(weights_dir, info_console=None):
+    found = []
+    not_found = []
+    for model in WHISPER_MODELS:
+        model_path = os.path.join(weights_dir, MODEL_FILE_MAP[model])
+        if os.path.exists(model_path):
+            found.append(model)
+            if info_console:
+                log_console(info_console, [(f"Модель '", 'info_tag'), (model, 'highlight_tag'),
+                                           ("' найдена в выбранной папке.", 'success_tag')])
+        else:
+            not_found.append(model)
+            if info_console:
+                log_console(info_console, [(f"Модель '", 'error_tag'), (model, 'highlight_tag'),
+                                           ("' НЕ найдена в выбранной папке.", 'error_tag')])
+    if info_console:
+        log_console(info_console, [("-" * 20, 'info_tag')])
+    return found, not_found
+
+
+def select_weights_folder(label_widget):
+    global current_weights_dir
+    folder = filedialog.askdirectory(title="Выберите папку с весами моделей Whisper")
+    if folder:
+        current_weights_dir = folder
+        label_widget.config(text=f"Текущая папка с весами: {current_weights_dir}")
+        os.environ['WHISPER_CACHE_DIR'] = current_weights_dir
+        found, not_found = scan_weights_folder(current_weights_dir, info_console)
+        # Обновить список моделей в combobox
+        if found:
+            model_combo['values'] = found
+            model_var.set(found[0])
+        else:
+            model_combo['values'] = WHISPER_MODELS
+            model_var.set('tiny')
+            log_console(info_console,
+                        [("В выбранной папке не найдено ни одной модели. Будет загружена модель tiny.", 'error_tag')])
+            # Триггерим загрузку tiny (асинхронно)
+            Thread(target=lambda: whisper.load_model('tiny'), daemon=True).start()
+    else:
+        label_widget.config(text=f"Текущая папка с весами: {current_weights_dir}")
 
 
 # --- Интерфейс ---
@@ -521,12 +580,17 @@ output_format_combo = ttk.Combobox(control_frame, textvariable=output_format_var
 output_format_combo.current(0)
 output_format_combo.grid(row=3, column=1, sticky="ew", padx=8, pady=(0, row_pad))
 
+# Кнопка выбора папки с весами
+select_weights_button = ttk.Button(control_frame, text="Выбрать внешнюю папку с весами моделей Whisper",
+                                   command=lambda: select_weights_folder(weights_label))
 # Кнопка выбора файла
 select_button = ttk.Button(control_frame, text="Выбрать видео/аудио файл",
                            command=lambda: select_file(model_var, device_var, lang_var, output_format_var, status_label,
                                                        result_text, root, select_button, info_console, progress_bar,
-                                                       show_result_var))
-select_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad + 5, row_pad))
+                                                       show_result_var, batch_button, select_weights_button))
+# Кнопка выбора папки с весами
+weights_label = tk.Label(control_frame, text=f"Текущая папка с весами: {DEFAULT_WEIGHTS_DIR}", anchor='w',
+                         wraplength=280)
 
 # Новая кнопка для пакетной обработки
 batch_button = ttk.Button(control_frame, text="Добавить папку (пакетная обработка)",
@@ -534,12 +598,17 @@ batch_button = ttk.Button(control_frame, text="Добавить папку (па
                                                                              output_format_var, status_label,
                                                                              result_text, root, select_button,
                                                                              batch_button, info_console, progress_bar,
-                                                                             show_result_var))
-batch_button.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
+                                                                             show_result_var, select_weights_button))
 
-# Статус (смещаем на новую строку)
+# Статус (сдвигаем на новую строку)
 status_label = tk.Label(control_frame, text="Ожидание выбора файла.")
-status_label.grid(row=6, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
+
+# Сдвигаем все элементы ниже на +2 строки (select_button, batch_button, status_label)
+select_weights_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad + 5, row_pad))
+weights_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, row_pad))
+select_button.grid(row=6, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad + 5, row_pad))
+batch_button.grid(row=7, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
+status_label.grid(row=8, column=0, columnspan=2, sticky="ew", padx=8, pady=(row_pad, row_pad))
 
 # --- Информационная консоль (в левой колонке) ---
 console_frame = tk.Frame(left_column_frame)  # Родитель - left_column_frame
